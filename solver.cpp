@@ -5,7 +5,6 @@
 #include <stdexcept>
 #include <algorithm>
 #include <utility>
-#include <functional> // For std::function
 #include "nlohmann/json.hpp"
 #include "BigInt.hpp"
 
@@ -36,42 +35,39 @@ BigInt convertToBase10(const std::string& numStr, int base) {
 }
 
 /**
- * @brief Evaluates a polynomial defined by a set of points at a specific x-coordinate.
- *
- * Uses Lagrange Interpolation to find P(x_to_evaluate) without explicitly
- * finding the polynomial coefficients. Uses a common denominator to maintain precision
- * with BigInt arithmetic.
+ * @brief Calculates the polynomial's constant term P(0) using Lagrange Interpolation.
  *
  * @param points The vector of (x, y) pairs defining the polynomial.
- * @param x_to_evaluate The x-coordinate at which to evaluate the polynomial.
- * @return The value of the polynomial at x_to_evaluate.
+ * @return The value of the polynomial at x=0.
  */
-BigInt lagrange_evaluate(const std::vector<std::pair<long long, BigInt>>& points, long long x_to_evaluate) {
-    BigInt final_numerator = 0;
-    BigInt common_denominator = 1;
+BigInt lagrange_interpolate_at_zero(const std::vector<std::pair<long long, BigInt>>& points) {
+    BigInt final_result = 0;
+    long long x_to_evaluate = 0;
 
-    for (const auto& p_j : points) {
-        BigInt num = p_j.second; // This is y_j
-        BigInt den = 1;
+    for (const auto& p_j : points) { // for each point j
+        BigInt term_numerator = p_j.second; // y_j
+        BigInt term_denominator = 1;
+        
+        // Calculate the Lagrange basis polynomial L_j(0)
         for (const auto& p_i : points) {
             if (p_i.first == p_j.first) continue; // Skip if i == j
-            num *= (x_to_evaluate - p_i.first);
-            den *= (p_j.first - p_i.first);
+            term_numerator *= (x_to_evaluate - p_i.first);
+            term_denominator *= (p_j.first - p_i.first);
         }
-        final_numerator = final_numerator * den + num * common_denominator;
-        common_denominator *= den;
+        
+        if (term_denominator == 0) {
+            throw std::runtime_error("Division by zero in Lagrange basis. Check for duplicate x-coordinates.");
+        }
+        
+        final_result += term_numerator / term_denominator;
     }
 
-    if (common_denominator == 0) {
-        // This should not happen with valid inputs (distinct x-coordinates in the subset)
-        throw std::runtime_error("Division by zero in Lagrange evaluation. Check for duplicate x-coords in a combination.");
-    }
-    return final_numerator / common_denominator;
+    return final_result;
 }
 
 
 /**
- * @brief Processes a single JSON file to find the polynomial's constant term.
+ * @brief Processes a single JSON file.
  */
 void processFile(const char* filename) {
     std::cout << "===== Processing file: " << filename << " =====" << std::endl;
@@ -97,56 +93,24 @@ void processFile(const char* filename) {
         all_points.push_back({std::stoll(key), convertToBase10(val["value"].get<std::string>(), std::stoi(val["base"].get<std::string>()))});
     }
 
-    size_t n = all_points.size();
-    if (n < k) {
-        std::cerr << "Error: Not enough points in file. Have " << n << ", need " << k << "." << std::endl << std::endl;
+    if (all_points.size() < k) {
+        std::cerr << "Error: Not enough points in file. Have " << all_points.size() << ", need " << k << "." << std::endl << std::endl;
         return;
     }
 
-    // 2. Iterate through all combinations of k points to find the best-fit polynomial
-    int best_inlier_count = -1;
-    BigInt final_answer = 0;
-    std::vector<int> combination_indices;
+    // 2. Sort all points by their x-coordinate
+    std::sort(all_points.begin(), all_points.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
 
-    // A recursive lambda function to generate combinations
-    std::function<void(int, int)> generate_combinations = 
-        [&](int offset, int count_needed) {
-        
-        // Base case: a combination is formed
-        if (count_needed == 0) {
-            std::vector<std::pair<long long, BigInt>> subset;
-            for (int index : combination_indices) {
-                subset.push_back(all_points[index]);
-            }
+    // 3. Select the first k points (those with the smallest x-values) for the calculation
+    std::vector<std::pair<long long, BigInt>> points_for_calc(all_points.begin(), all_points.begin() + k);
+    
+    std::cout << "Using the " << k << " points with the smallest x-values for calculation." << std::endl;
 
-            // Test this subset's polynomial against all points
-            int current_inlier_count = 0;
-            for (const auto& p : all_points) {
-                if (lagrange_evaluate(subset, p.first) == p.second) {
-                    current_inlier_count++;
-                }
-            }
-            
-            // If this is the best fit so far, store its constant term
-            if (current_inlier_count > best_inlier_count) {
-                best_inlier_count = current_inlier_count;
-                final_answer = lagrange_evaluate(subset, 0); // Calculate P(0)
-            }
-            return;
-        }
-        
-        // Recursive step
-        for (int i = offset; i <= n - count_needed; ++i) {
-            combination_indices.push_back(i);
-            generate_combinations(i + 1, count_needed - 1);
-            combination_indices.pop_back(); // backtrack
-        }
-    };
+    // 4. Calculate the final answer
+    BigInt final_answer = lagrange_interpolate_at_zero(points_for_calc);
 
-    std::cout << "Searching for best polynomial fit among " << n << " points (k=" << k << ")..." << std::endl;
-    generate_combinations(0, k);
-
-    std::cout << "Found a polynomial that fits " << best_inlier_count << " of " << n << " points." << std::endl;
     std::cout << "\n-----------------------------------------" << std::endl;
     std::cout << "Calculated constant term P(0) = " << final_answer << std::endl;
     std::cout << "-----------------------------------------" << std::endl << std::endl;
@@ -164,3 +128,4 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+
